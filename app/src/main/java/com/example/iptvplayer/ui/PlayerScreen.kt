@@ -3,6 +3,9 @@ package com.example.iptvplayer.ui
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.os.Build
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -37,6 +41,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -78,6 +83,20 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 @OptIn(UnstableApi::class)
+private fun nextResizeMode(mode: Int): Int = when (mode) {
+    AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+}
+
+@OptIn(UnstableApi::class)
+private fun resizeModeLabel(mode: Int): String = when (mode) {
+    AspectRatioFrameLayout.RESIZE_MODE_FIT -> "Ajustar"
+    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Llenar pantalla"
+    else -> "Estirar"
+}
+
+@OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(vm: MainViewModel) {
     val channel by vm.current.collectAsState()
@@ -88,6 +107,7 @@ fun PlayerScreen(vm: MainViewModel) {
 
     var overlay by remember { mutableStateOf(true) }
     var buffering by remember { mutableStateOf(true) }
+    var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     val focus = remember { FocusRequester() }
     val timeFmt = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
 
@@ -96,7 +116,16 @@ fun PlayerScreen(vm: MainViewModel) {
     // Pantalla completa inmersiva + pantalla siempre encendida mientras se ve TV
     val view = LocalView.current
     DisposableEffect(view) {
-        val window = view.context.findActivity()?.window
+        val activity = view.context.findActivity()
+        val window = activity?.window
+        // Horizontal automática (sensor) y uso del área de la muesca/cámara
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && window != null) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         val controller = window?.let { WindowCompat.getInsetsController(it, view) }
         controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller?.hide(WindowInsetsCompat.Type.systemBars())
@@ -104,6 +133,13 @@ fun PlayerScreen(vm: MainViewModel) {
         onDispose {
             controller?.show(WindowInsetsCompat.Type.systemBars())
             view.keepScreenOn = false
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && window != null) {
+                window.attributes = window.attributes.apply {
+                    layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                }
+            }
         }
     }
 
@@ -148,6 +184,7 @@ fun PlayerScreen(vm: MainViewModel) {
                 when (e.key) {
                     Key.DirectionUp, Key.ChannelUp -> { vm.zap(false); true }
                     Key.DirectionDown, Key.ChannelDown -> { vm.zap(true); true }
+                    Key.DirectionLeft -> { resizeMode = nextResizeMode(resizeMode); overlay = true; true }
                     Key.DirectionRight -> { channel?.let { vm.toggleFavorite(it) }; overlay = true; true }
                     Key.DirectionCenter, Key.Enter -> { overlay = !overlay; true }
                     Key.MediaPlayPause -> {
@@ -165,11 +202,13 @@ fun PlayerScreen(vm: MainViewModel) {
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setKeepContentOnPlayerReset(true)
                 }
             },
-            update = { it.player = player }
+            update = {
+                it.player = player
+                it.resizeMode = resizeMode
+            }
         )
 
         // Capa transparente para tocar y mostrar/ocultar la información
@@ -232,6 +271,18 @@ fun PlayerScreen(vm: MainViewModel) {
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.titleLarge
                     )
+                    Text(
+                        resizeModeLabel(resizeMode),
+                        color = Color(0xFFCCCCCC),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    IconButton(onClick = { resizeMode = nextResizeMode(resizeMode) }) {
+                        Icon(
+                            Icons.Filled.AspectRatio,
+                            contentDescription = "Cambiar tamaño del video",
+                            tint = Color.White
+                        )
+                    }
                     IconButton(onClick = { channel?.let { vm.toggleFavorite(it) } }) {
                         Icon(
                             if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
@@ -289,7 +340,7 @@ fun PlayerScreen(vm: MainViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "▲▼ cambiar canal   ·   OK info   ·   ► favorito",
+                            "▲▼ canal   ·   OK info   ·   ◄ tamaño   ·   ► favorito",
                             modifier = Modifier.weight(1f),
                             color = Color(0xFF999999),
                             style = MaterialTheme.typography.labelSmall
